@@ -1,14 +1,10 @@
-using Revise
+module OneDimensionalTDHF
+
 using Plots
 using LinearAlgebra
 using Parameters
 using OneDimensionalStaticHF
 
-module My
-
-using Parameters
-
-using OneDimensionalStaticHF
 
 @with_kw struct PhysicalParam{T} @deftype Float64
     mc² = 938.
@@ -36,47 +32,20 @@ using OneDimensionalStaticHF
     Efermi₀ 
 end
 
-end
 
 σ = 2.0 
 Δz = 0.1
 Nz = 600
 ψs₀, spEs₀, Πs₀, Efermi₀, ρ₀, τ₀ = HF_calc_with_imaginary_time_step(
-    σ=σ, Δz=Δz, Nz=div(Nz,2), show=true)
+    σ=σ, Δz=Δz, Nz=div(Nz,2), show=false)
 
-param = My.PhysicalParam(
+param = PhysicalParam(
     σ=σ, Δz=Δz, Nz=Nz,
     ψs₀=ψs₀, spEs₀=spEs₀, Πs₀=Πs₀, Efermi₀=Efermi₀)
 
-@show param.zs param.zs[div(Nz,2)+1]
-;
+#@show param.zs param.zs[div(Nz,2)+1]
 
-#=
-function initial_states(param, z₀, S)
-    @unpack Nz, Δz, zs, ψs₀ = param
-    
-    dz₀ = floor(Int, z₀/Δz)
-    
-    nstates = size(ψs₀, 2)
-    ψs = zeros(ComplexF64, Nz, nstates)
-    ψ = zeros(ComplexF64, Nz)
-    for i in 1:nstates
-        ψs[1:div(Nz,2),i] = reverse(ψs₀[:,i])
-        ψs[1+div(Nz,2):Nz,i] = ψs₀[:,i]
-        for iz in 1:Nz
-            jz = iz - dz₀
-            if jz < 1 || jz > Nz
-                ψs[iz,i] = 0
-                continue
-            end
-            ψ[iz] = ψs[jz,i]
-        end
-        @. ψs[:,i] = ψ*exp(im*S)
-    end
-    
-    return ψs
-end
-=#
+
 
 function initial_states(param, z₀, S; Nslab=1)
     @assert length(z₀) === Nslab
@@ -93,7 +62,7 @@ function initial_states(param, z₀, S; Nslab=1)
         for istate₀ in 1:nstates₀
             i = (islab-1)*nstates₀ + istate₀
             
-            ψs[1:div(Nz,2),i] = reverse(ψs₀[:,istate₀])
+            ψs[1:div(Nz,2),i] = reverse(ψs₀[:,istate₀])*Πs₀[istate₀]
             ψs[1+div(Nz,2):Nz,i] = ψs₀[:,istate₀]
             
             for iz in 1:Nz
@@ -134,7 +103,7 @@ function test_initial_states(param, z₀; Nslab=1)
     occ
 end
 
-test_initial_states(param, [-10, 10]; Nslab=2)
+#test_initial_states(param, [-10, 10]; Nslab=2)
 
 function make_Hamiltonian(param, vpot)
     @unpack Δz, Nz, zs = param
@@ -157,7 +126,7 @@ function test_make_Hamiltonian(param; σ=1.4)
     vals[1:10] ./ 2
 end
 
-test_make_Hamiltonian(param)
+#test_make_Hamiltonian(param)
 
 function first_deriv!(dψ, zs, ψ)
     Nz = length(zs)
@@ -186,7 +155,7 @@ function test_first_deriv!(param)
     plot!(zs, dψ_exact)
 end
 
-test_first_deriv!(param)
+#test_first_deriv!(param)
 
 function calc_density!(ρ, τ, param, ψs, occ)
     @unpack mc², ħc, Δz, Nz, zs = param
@@ -228,7 +197,7 @@ function test_calc_density!(param)
     display(p)
 end
 
-test_calc_density!(param)
+#test_calc_density!(param)
 
 function calc_norm(zs, ψ)
     Δz = zs[2] - zs[1]
@@ -300,6 +269,6 @@ function test_real_time_evolution!(param; α=0.1, Δt=0.1, T=20)
     gif(anim, "anim_fps15.gif", fps = 15)
 end
 
-test_real_time_evolution!(param; α=0.0, Δt=0.01, T=10)
+#test_real_time_evolution!(param; α=0.0, Δt=0.01, T=10)
 
-
+end # module
