@@ -269,6 +269,52 @@ function test_real_time_evolution!(param; α=0.1, Δt=0.1, T=20)
     gif(anim, "anim_fps15.gif", fps = 15)
 end
 
+
+function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=600, α=0.02, Δt=0.025, T=20)
+
+    ψs₀, spEs₀, Πs₀, Efermi₀, ρ₀, τ₀ = HF_calc_with_imaginary_time_step(
+        σ=σ, Δz=Δz, Nz=div(Nz,2), show=false)
+
+    param = PhysicalParam(
+        σ=σ, Δz=Δz, Nz=Nz,
+        ψs₀=ψs₀, spEs₀=spEs₀, Πs₀=Πs₀, Efermi₀=Efermi₀)
+
+    @unpack Nz, zs = param
+    S = zeros(Float64, Nz)
+    @. S = α*zs^2
+    @time ψs, occ = initial_states(param, 0.0, S; Nslab=1)
+    
+    ρ = similar(zs)
+    τ = similar(zs)
+    vpot = similar(zs)
+    calc_density!(ρ, τ, param, ψs, occ)
+    
+    ψs_mid = similar(ψs)
+    ρ_mid = similar(zs)
+    τ_mid = similar(zs)
+    vpot_mid = similar(zs)
+    
+    anim = @animate for it in 1:floor(Int, T/abs(Δt))
+        real_time_evolution!(ψs, ψs_mid, occ, 
+            ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=Δt)
+        calc_density!(ρ, τ, param, ψs, occ)
+        plot(zs, ρ; ylim=(0,0.3))
+    end
+    
+    gif(anim, "anim_fps15.gif", fps = 15)
+end
+
+
+function slab_collision(;σ=1.4, Δz=0.1, Nz=600, α=0.02, Δt=0.025, T=20)
+    
+end
+
+
+
+
+
+
+
 #test_real_time_evolution!(param; α=0.0, Δt=0.01, T=10)
 
 end # module
