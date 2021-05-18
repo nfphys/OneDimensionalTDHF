@@ -225,8 +225,9 @@ function real_time_evolution!(ψs, ψs_mid, occ,
     end
     
     calc_density!(ρ_mid, τ_mid, param, ψs_mid, occ)
-    calc_potential!(vpot_mid, param, ρ)
+    calc_potential!(vpot_mid, param, ρ_mid)
     Hmat_mid = make_Hamiltonian(param, vpot_mid)
+    
     @. Hmat = (Hmat + Hmat_mid)/2
     
     U₁ =          (I - 0.5*im*Δt*Hmat)
@@ -241,6 +242,7 @@ function real_time_evolution!(ψs, ψs_mid, occ,
     #@show calc_norm(zs, ψs[:,1]) 
 end
 
+#=
 function test_real_time_evolution!(param; α=0.1, Δt=0.1, T=20)
     @unpack Nz, zs = param
     
@@ -267,6 +269,7 @@ function test_real_time_evolution!(param; α=0.1, Δt=0.1, T=20)
     
     gif(anim, "anim_fps15.gif", fps = 15)
 end
+=#
 
 
 function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=600, α=0.02, Δt=0.025, T=20)
@@ -282,11 +285,14 @@ function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=600, α=0.02, Δt=0.025, 
     S = zeros(Float64, Nz)
     @. S = α*zs^2
     @time ψs, occ = initial_states(param, 0.0, S; Nslab=1)
+
+    Etots = Float64[] # history of total energy 
     
     ρ = similar(zs)
     τ = similar(zs)
     vpot = similar(zs)
     calc_density!(ρ, τ, param, ψs, occ)
+    push!(Etots, calc_total_energy(param, ρ, τ)/2)
     
     ψs_mid = similar(ψs)
     ρ_mid = similar(zs)
@@ -297,8 +303,12 @@ function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=600, α=0.02, Δt=0.025, 
         real_time_evolution!(ψs, ψs_mid, occ, 
             ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=Δt)
         calc_density!(ρ, τ, param, ψs, occ)
+        push!(Etots, calc_total_energy(param, ρ, τ)/2)
         plot(zs, ρ; ylim=(0,0.3))
     end
+
+    p = plot(Etots; xlabel="iter", ylabel="Etot", legend=false)
+    display(p)
     
     gif(anim, "small_amplitude_dynamics.gif", fps = 15)
 end
@@ -316,11 +326,14 @@ function slab_propagation(;σ=1.4, z₀=0.0, Δz=0.1, Nz=600, k=1.0, Δt=0.025, 
     S = zeros(Float64, Nz)
     @. S = k*zs
     @time ψs, occ = initial_states(param, z₀, S; Nslab=1)
+
+    Etots = Float64[] # history of total energy 
     
     ρ = similar(zs)
     τ = similar(zs)
     vpot = similar(zs)
     calc_density!(ρ, τ, param, ψs, occ)
+    push!(Etots, calc_total_energy(param, ρ, τ)/2)
     
     ψs_mid = similar(ψs)
     ρ_mid = similar(zs)
@@ -331,8 +344,12 @@ function slab_propagation(;σ=1.4, z₀=0.0, Δz=0.1, Nz=600, k=1.0, Δt=0.025, 
         real_time_evolution!(ψs, ψs_mid, occ, 
             ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=Δt)
         calc_density!(ρ, τ, param, ψs, occ)
-        plot(zs, ρ; ylim=(0,0.3))
+        push!(Etots, calc_total_energy(param, ρ, τ)/2)
+        plot(zs, ρ; ylim=(0,0.3), label="ρ")
     end
+
+    p = plot(Etots; xlabel="iter", ylabel="Etot", legend=false)
+    display(p)
     
     gif(anim, "slab_propagation.gif", fps = 15)
 end
@@ -352,11 +369,14 @@ function slab_collision(;σ=1.4, z₀=[-15.0, 15.0], Δz=0.1, Nz=600, k=1.0, Δt
     @. S[:,1] =  k*zs
     @. S[:,2] = -k*zs 
     @time ψs, occ = initial_states(param, z₀, S; Nslab=2)
+
+    Etots = Float64[] # history of total energy 
     
     ρ = similar(zs)
     τ = similar(zs)
     vpot = similar(zs)
     calc_density!(ρ, τ, param, ψs, occ)
+    push!(Etots, calc_total_energy(param, ρ, τ)/2)
     
     ψs_mid = similar(ψs)
     ρ_mid = similar(zs)
@@ -367,10 +387,14 @@ function slab_collision(;σ=1.4, z₀=[-15.0, 15.0], Δz=0.1, Nz=600, k=1.0, Δt
         real_time_evolution!(ψs, ψs_mid, occ, 
             ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=Δt)
         calc_density!(ρ, τ, param, ψs, occ)
+        push!(Etots, calc_total_energy(param, ρ, τ)/2)
         plot(zs, ρ; ylim=(0,0.3))
     end
+
+    p = plot(Etots; xlabel="iter", ylabel="Etot", legend=false)
+    display(p)
     
-    gif(anim, "slab_propagation.gif", fps = 15)
+    gif(anim, "slab_collision.gif", fps = 15)
 end
 
 
