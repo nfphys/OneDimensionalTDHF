@@ -48,7 +48,7 @@ param = PhysicalParam(
 
 
 function initial_states(param, z₀, S; Nslab=1)
-    @assert length(z₀) === Nslab
+    @assert length(z₀) === Nslab === size(S, 2)
     @unpack mc², ħc, Nz, Δz, zs, ψs₀, spEs₀, Efermi₀ = param
     
     nstates₀ = size(ψs₀, 2)
@@ -74,7 +74,7 @@ function initial_states(param, z₀, S; Nslab=1)
                 ψ[iz] = ψs[jz,i]
             end
             
-            @. ψs[:,i] = ψ*exp(im*S)
+            @. ψs[:,i] = ψ*exp(im*S[:,islab])
             if spEs₀[istate₀] ≤ Efermi₀
                 occ[i] = (2mc²/(π*ħc*ħc))*(Efermi₀-spEs₀[istate₀])
             end
@@ -88,8 +88,7 @@ end
 function test_initial_states(param, z₀; Nslab=1)
     @unpack Nz, zs = param
     
-    S = zeros(Float64, Nz)
-    #S = @. zs^2
+    S = zeros(Float64, Nz, Nslab)
     @time ψs, occ = initial_states(param, z₀, S; Nslab=Nslab)
     
     
@@ -339,8 +338,39 @@ function slab_propagation(;σ=1.4, z₀=0.0, Δz=0.1, Nz=600, k=1.0, Δt=0.025, 
 end
 
 
-function slab_collision(;σ=1.4, Δz=0.1, Nz=600, α=0.02, Δt=0.025, T=20)
+function slab_collision(;σ=1.4, z₀=[-15.0, 15.0], Δz=0.1, Nz=600, k=1.0, Δt=0.025, T=20)
+    
+    ψs₀, spEs₀, Πs₀, Efermi₀, ρ₀, τ₀ = HF_calc_with_imaginary_time_step(
+        σ=σ, Δz=Δz, Nz=div(Nz,2), show=false)
 
+    param = PhysicalParam(
+        σ=σ, Δz=Δz, Nz=Nz,
+        ψs₀=ψs₀, spEs₀=spEs₀, Πs₀=Πs₀, Efermi₀=Efermi₀)
+
+    @unpack Nz, zs = param
+    S = zeros(Float64, Nz, 2)
+    @. S[:,1] =  k*zs
+    @. S[:,2] = -k*zs 
+    @time ψs, occ = initial_states(param, z₀, S; Nslab=2)
+    
+    ρ = similar(zs)
+    τ = similar(zs)
+    vpot = similar(zs)
+    calc_density!(ρ, τ, param, ψs, occ)
+    
+    ψs_mid = similar(ψs)
+    ρ_mid = similar(zs)
+    τ_mid = similar(zs)
+    vpot_mid = similar(zs)
+    
+    anim = @animate for it in 1:floor(Int, T/abs(Δt))
+        real_time_evolution!(ψs, ψs_mid, occ, 
+            ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=Δt)
+        calc_density!(ρ, τ, param, ψs, occ)
+        plot(zs, ρ; ylim=(0,0.3))
+    end
+    
+    gif(anim, "slab_propagation.gif", fps = 15)
 end
 
 
@@ -349,6 +379,5 @@ end
 
 
 
-#test_real_time_evolution!(param; α=0.0, Δt=0.01, T=10)
 
 end # module
