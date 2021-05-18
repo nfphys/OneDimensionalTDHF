@@ -304,7 +304,7 @@ function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=600, α=0.02, Δt=0.025, 
             ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=Δt)
         calc_density!(ρ, τ, param, ψs, occ)
         push!(Etots, calc_total_energy(param, ρ, τ)/2)
-        plot(zs, ρ; ylim=(0,0.3))
+        plot(zs, ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
     end
 
     p = plot(Etots; xlabel="iter", ylabel="Etot", legend=false)
@@ -345,7 +345,7 @@ function slab_propagation(;σ=1.4, z₀=0.0, Δz=0.1, Nz=600, k=1.0, Δt=0.025, 
             ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=Δt)
         calc_density!(ρ, τ, param, ψs, occ)
         push!(Etots, calc_total_energy(param, ρ, τ)/2)
-        plot(zs, ρ; ylim=(0,0.3), label="ρ")
+        plot(zs, ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
     end
 
     p = plot(Etots; xlabel="iter", ylabel="Etot", legend=false)
@@ -388,7 +388,7 @@ function slab_collision(;σ=1.4, z₀=[-15.0, 15.0], Δz=0.1, Nz=600, k=1.0, Δt
             ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=Δt)
         calc_density!(ρ, τ, param, ψs, occ)
         push!(Etots, calc_total_energy(param, ρ, τ)/2)
-        plot(zs, ρ; ylim=(0,0.3))
+        plot(zs, ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
     end
 
     p = plot(Etots; xlabel="iter", ylabel="Etot", legend=false)
