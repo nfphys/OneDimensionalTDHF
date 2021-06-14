@@ -236,14 +236,14 @@ function real_time_evolution!(states, states_mid,
         dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=0.1
     )
 
-    @unpack Nz, Δz, zs = param
+    @unpack mc², ħc, Nz, Δz, zs = param
     @unpack nstates, ψs = states 
 
     calc_potential!(vpot, param, dens)
     make_Hamiltonian!(Hmat, param, vpot)
 
-    U₁ =          (I - 0.5*im*Δt*Hmat)
-    U₂ = factorize(I + 0.5*im*Δt*Hmat)
+    U₁ =          (I - 0.5*im*Δt*ħc^2/2mc²*Hmat)
+    U₂ = factorize(I + 0.5*im*Δt*ħc^2/2mc²*Hmat)
 
     for i in 1:nstates
         @views states_mid.ψs[:,i] = U₂\(U₁*ψs[:,i])
@@ -256,8 +256,8 @@ function real_time_evolution!(states, states_mid,
     @. Hmat.dv = (Hmat.dv + Hmat_mid.dv)/2
     @. Hmat.ev = (Hmat.ev + Hmat_mid.ev)/2
 
-    U₁ =          (I - 0.5*im*Δt*Hmat)
-    U₂ = factorize(I + 0.5*im*Δt*Hmat)
+    U₁ =          (I - 0.5*im*Δt*ħc^2/2mc²*Hmat)
+    U₂ = factorize(I + 0.5*im*Δt*ħc^2/2mc²*Hmat)
 
     for i in 1:nstates
         @views ψs[:,i] = U₂\(U₁*ψs[:,i])
@@ -266,43 +266,6 @@ function real_time_evolution!(states, states_mid,
     calc_density!(dψ, dens, param, states)
 end
 
-
-
-#=
-function real_time_evolution!(ψs, ψs_mid, occ, 
-        ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=0.1)
-    
-    @unpack Nz, Δz, zs = param
-    nstates = size(ψs, 2)
-    
-    calc_potential!(vpot, param, ρ)
-    Hmat = make_Hamiltonian(param, vpot)
-    
-    U₁ =          (I - 0.5*im*Δt*Hmat)
-    U₂ = factorize(I + 0.5*im*Δt*Hmat)
-    
-    for i in 1:nstates
-        @views ψs_mid[:,i] = U₂\(U₁*ψs[:,i])
-    end
-    
-    calc_density!(ρ_mid, τ_mid, param, ψs_mid, occ)
-    calc_potential!(vpot_mid, param, ρ_mid)
-    Hmat_mid = make_Hamiltonian(param, vpot_mid)
-    
-    @. Hmat = (Hmat + Hmat_mid)/2
-    
-    U₁ =          (I - 0.5*im*Δt*Hmat)
-    U₂ = factorize(I + 0.5*im*Δt*Hmat)
-    
-    for i in 1:nstates
-        @views ψs[:,i] = U₂\(U₁*ψs[:,i])
-    end
-    
-    #@views ψs[:,i] ./= calc_norm(zs, ψs[:,i])
-    
-    #@show calc_norm(zs, ψs[:,1]) 
-end
-=#
 
 
 function calc_root_mean_square_length(param, dens)
@@ -316,10 +279,10 @@ end
 
 
 
-function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=600, α=0.02, Δt=0.1, T=20)
+function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=400, α=0.02, Δt=1e-3, T=2)
 
     param = PhysicalParam(Nslab=1, σ=[σ], Δz=Δz, Nz=Nz)
-    @unpack zs, Nz, Δz = param
+    @unpack mc², ħc, zs, Nz, Δz = param
 
     ts = Δt:Δt:T # time [MeV⁻¹]
 
@@ -351,26 +314,37 @@ function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=600, α=0.02, Δt=0.1, T=
     
     @time for it in 1:length(ts)
         real_time_evolution!(states, states_mid, 
-            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=0.1
+            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=Δt
         )
         Etots[it] = calc_total_energy(param, dens)
         Ls[it] = calc_root_mean_square_length(param, dens)
         #plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
     end
 
+    
+    function model(t, p)
+        A, ħω, α, L₀ = p 
+        @. A*cos(ħω*t + α) + L₀
+    end
+
+    p0 = Float64[0.1, 15, 0.0, 3.0]
+    fit = curve_fit(model, ts, Ls, p0)
+
+    p = plot(ts, Etots; xlabel="time [MeV⁻¹]", ylabel="total energy")
+    display(p)
+
+    p = plot(ts, Ls; xlabel="time [MeV⁻¹]", ylabel="root mean square length", label="")
+    plot!(ts, model(ts, fit.param); label="model")
+    display(p)
+
     println("")
-    @show E_fluc = abs(std(Etots)/mean(Etots))
+    @show E_fluc = abs(std(Etots)/mean(Etots))*100
     @show L_fluc = abs(std(Ls)/mean(Ls))*100
-
-    model(t, p) = 
-
-    p = plot(ts, Etots; xlabel="time [MeV⁻¹]", ylabel="total energy", legend=false)
-    display(p)
-
-    p = plot(ts, Ls; xlabel="time [MeV⁻¹]", ylabel="root mean square length", legend=false)
-    display(p)
+    @show fit.param
     
     #gif(anim, "small_amplitude_dynamics.gif", fps = 15)
+
+    return 
 end
 
 
