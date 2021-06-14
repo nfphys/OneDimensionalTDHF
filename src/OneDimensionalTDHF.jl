@@ -4,6 +4,8 @@ using Plots
 using LinearAlgebra
 using Parameters
 using OneDimensionalStaticHF
+using Statistics
+using LsqFit
 
 
 @with_kw struct PhysicalParam{T} @deftype Float64
@@ -17,53 +19,76 @@ using OneDimensionalStaticHF
     V₀ = -166.9239/a 
     
     ρ₀ = 0.16
-    σ = 1.4
+
+    Nslab::Int64 = 2
+    σ::Vector{Float64} = fill(1.4, Nslab); @assert length(σ) === Nslab
 
     Δz = 0.1
-    Nz::Int64 = 200; 
+    Nz::Int64 = 200; @assert iseven(Nz)
 
     zs::T = range((-Nz/2+1/2)*Δz, (Nz/2-1/2)*Δz, length=Nz)
     
     cnvl_coeff::Vector{Float64} = calc_cnvl_coeff(Δz, a)
-    
-    ψs₀::Matrix{ComplexF64}
-    spEs₀::Vector{Float64}
-    Πs₀::Vector{Float64}
-    Efermi₀ 
+end
+
+@with_kw struct Densities 
+    "ρ: number density"
+    ρ::Vector{Float64}
+
+    "τ: kinetic density"
+    τ::Vector{Float64} = similar(ρ)
+end
+
+@with_kw struct SingleParticleStates 
+    "nstates: number of single particle states"
+    nstates::Int64
+
+    "ψs: wave functions"
+    ψs::Matrix{ComplexF64}; @assert size(ψs, 2) === nstates 
+
+    "occ: occupation numbers"
+    occ::Vector{Float64}; @assert length(occ) === nstates
 end
 
 
-σ = 2.0 
-Δz = 0.1
-Nz = 600
-ψs₀, spEs₀, Πs₀, Efermi₀, ρ₀, τ₀ = HF_calc_with_imaginary_time_step(
-    σ=σ, Δz=Δz, Nz=div(Nz,2), show=false)
-
-param = PhysicalParam(
-    σ=σ, Δz=Δz, Nz=Nz,
-    ψs₀=ψs₀, spEs₀=spEs₀, Πs₀=Πs₀, Efermi₀=Efermi₀)
-
-#@show param.zs param.zs[div(Nz,2)+1]
 
 
 
-function initial_states(param, z₀, S; Nslab=1)
+
+function initial_states(param, z₀, S)
+    @unpack mc², ħc, Nslab, σ, Nz, Δz, zs = param
     @assert length(z₀) === Nslab === size(S, 2)
-    @unpack mc², ħc, Nz, Δz, zs, ψs₀, spEs₀, Efermi₀ = param
-    
-    nstates₀ = size(ψs₀, 2)
-    ψs = zeros(ComplexF64, Nz, nstates₀*Nslab)
-    occ = zeros(Float64, nstates₀*Nslab)
-    ψ = zeros(ComplexF64, Nz)
-    
+
+    states_static = OneDimensionalStaticHF.SingleParticleStates[]
+    nstates_static = zeros(Int64, Nslab)
+
+    for islab in 1:Nslab 
+        states, dens = HF_calc_with_imaginary_time_step(;σ=σ[islab], Nz=div(Nz,2))
+        push!(states_static, states)
+        
+        nstates_static[islab] = states_static[islab].nstates 
+    end
+
+    nstates = sum(nstates_static)
+
+    ψ₀  = zeros(ComplexF64, div(Nz,2)) # storing static wave functions 
+    ψ   = zeros(ComplexF64, Nz) # work array for translating wave functions 
+
+    ψs  = zeros(ComplexF64, Nz, nstates)
+    occ = zeros(Float64, nstates)
+
+    istate = 0
     for islab in 1:Nslab
         dz₀ = floor(Int, z₀[islab]/Δz)
         
-        for istate₀ in 1:nstates₀
-            i = (islab-1)*nstates₀ + istate₀
+        for istate_static in 1:nstates_static[islab]
+            istate += 1
+
+            ψ₀[:] = states_static[islab].ψs[:,istate_static]
+            Π₀    = states_static[islab].Πs[istate_static]
             
-            ψs[1:div(Nz,2),i] = reverse(ψs₀[:,istate₀])*Πs₀[istate₀]
-            ψs[1+div(Nz,2):Nz,i] = ψs₀[:,istate₀]
+            ψs[1:div(Nz,2),istate] = reverse(ψ₀)*Π₀
+            ψs[1+div(Nz,2):Nz,istate] = ψ₀
             
             for iz in 1:Nz
                 jz = iz - dz₀
@@ -71,65 +96,67 @@ function initial_states(param, z₀, S; Nslab=1)
                     ψ[iz] = 0
                     continue
                 end
-                ψ[iz] = ψs[jz,i]
+                ψ[iz] = ψs[jz,istate]
             end
             
-            @. ψs[:,i] = ψ*exp(im*S[:,islab])
-            if spEs₀[istate₀] ≤ Efermi₀
-                occ[i] = (2mc²/(π*ħc*ħc))*(Efermi₀-spEs₀[istate₀])
-            end
+            @. ψs[:,istate] = ψ*exp(im*S[:,islab])
+            occ[istate] = states_static[islab].occ[istate_static]
         end
     end
-    
-    return ψs, occ
+
+    states = SingleParticleStates(nstates=nstates, ψs=ψs, occ=occ)
+
+    return states 
 end
 
 
-function test_initial_states(param, z₀; Nslab=1)
-    @unpack Nz, zs = param
+
+function test_initial_states(param, z₀)
+    @unpack Nz, zs, Nslab = param
     
     S = zeros(Float64, Nz, Nslab)
-    @time ψs, occ = initial_states(param, z₀, S; Nslab=Nslab)
+    @time states = initial_states(param, z₀, S)
     
+    @unpack nstates, ψs = states 
     
-    p = plot()
-    for i in 1:size(ψs, 2)
+    p = plot(legend=false)
+    for i in 1:nstates 
         plot!(p, zs, @views @. real(ψs[:,i]))
     end
     display(p)
-    
-    @show sum(occ)/2
-    occ
+
 end
 
-#test_initial_states(param, [-10, 10]; Nslab=2)
-
-function make_Hamiltonian(param, vpot)
+function make_Hamiltonian!(Hmat, param, vpot)
     @unpack Δz, Nz, zs = param
+    @unpack dv, ev = Hmat 
     
-    dv = similar(zs)
     @. dv = 2/Δz^2 + vpot
     
-    ev = fill(-1/Δz^2, Nz-1)
+    @. ev = -1/Δz^2
     
-    return SymTridiagonal(dv, ev)
+    return 
 end
 
-function test_make_Hamiltonian(param; σ=1.4)
-    @unpack zs = param
+function test_make_Hamiltonian!(param; σ=1.4)
+    @unpack zs, Nz = param
 
     vpot = @. zs^2
-    Hmat = make_Hamiltonian(param, vpot)
+
+    dv = zeros(Float64, Nz)
+    ev = zeros(Float64, Nz-1)
+    Hmat = SymTridiagonal(dv, ev)
+    make_Hamiltonian!(Hmat, param, vpot)
     
     vals, vecs = eigen(Hmat)
     vals[1:10] ./ 2
 end
 
-#test_make_Hamiltonian(param)
 
-function first_deriv!(dψ, zs, ψ)
+
+function first_deriv!(dψ, param, ψ)
+    @unpack Nz, Δz, zs = param 
     Nz = length(zs)
-    Δz = zs[2] - zs[1]
     
     dψ[1] = ψ[2]/2Δz
     for iz in 2:Nz-1
@@ -146,7 +173,7 @@ function test_first_deriv!(param)
     ψ = @. exp(-0.5zs*zs)
     
     dψ = similar(zs)
-    first_deriv!(dψ, zs, ψ)
+    first_deriv!(dψ, param, ψ)
     
     dψ_exact = @. -zs*exp(-0.5zs*zs)
     
@@ -154,18 +181,19 @@ function test_first_deriv!(param)
     plot!(zs, dψ_exact)
 end
 
-#test_first_deriv!(param)
 
-function calc_density!(ρ, τ, param, ψs, occ)
+
+
+function calc_density!(dψ, dens, param, states)
     @unpack mc², ħc, Δz, Nz, zs = param
-    nstates = size(ψs, 2)
+    @unpack ρ, τ = dens 
+    @unpack nstates, ψs, occ = states 
     
     fill!(ρ, 0)
     fill!(τ, 0)
-    dψ = zeros(ComplexF64, Nz)
     for i in 1:nstates
         @views ψ = ψs[:,i]
-        first_deriv!(dψ, zs, ψ)
+        first_deriv!(dψ, param, ψ)
         @. ρ += occ[i]*real(dot(ψ, ψ))
         @. τ += occ[i]*real(dot(dψ, dψ))
         @. τ += (π/2)*occ[i]^2*real(dot(ψ, ψ))
@@ -173,41 +201,74 @@ function calc_density!(ρ, τ, param, ψs, occ)
 end
 
 
-function test_calc_density!(param)
+function test_calc_density!(param, z₀)
     @unpack Nz, Δz, zs = param
     
-    S = zeros(Float64, Nz)
-    @time ψs, occ = initial_states(param, [-10,10], S; Nslab=2)
+    S = zeros(Float64, Nz, 2)
+    @time states = initial_states(param, z₀, S)
     
-    ρ = similar(zs)
-    τ = similar(zs)
-    calc_density!(ρ, τ, param, ψs, occ)
+    dens = Densities(ρ=similar(zs))
+    dψ = zeros(ComplexF64, Nz)
+    calc_density!(dψ, dens, param, states)
     
-    @show sum(ρ)*Δz/2
+    @show sum(dens.ρ)*Δz/2
     
     p = plot(ylim=(0,0.3))
-    plot!(zs, ρ)
-    plot!(zs, τ)
+    plot!(zs, dens.ρ)
+    plot!(zs, dens.τ)
     display(p)
     
     vpot = similar(zs)
-    calc_potential!(vpot, param, ρ)
+    calc_potential!(vpot, param, dens)
     p = plot(zs, vpot)
     display(p)
 end
 
-#test_calc_density!(param)
 
-function calc_norm(zs, ψ)
-    Δz = zs[2] - zs[1]
-    sqrt(dot(ψ, ψ)*Δz)
+
+
+
+function calc_total_energy(param, dens)
+    OneDimensionalStaticHF.calc_total_energy(param, dens) / 2
 end
 
-function calc_sp_energy(param, Hmat, ψ)
-    @unpack ħc, mc² = param
-    return dot(ψ, Hmat, ψ)/dot(ψ, ψ) * (ħc^2/2mc²)
+function real_time_evolution!(states, states_mid, 
+        dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=0.1
+    )
+
+    @unpack Nz, Δz, zs = param
+    @unpack nstates, ψs = states 
+
+    calc_potential!(vpot, param, dens)
+    make_Hamiltonian!(Hmat, param, vpot)
+
+    U₁ =          (I - 0.5*im*Δt*Hmat)
+    U₂ = factorize(I + 0.5*im*Δt*Hmat)
+
+    for i in 1:nstates
+        @views states_mid.ψs[:,i] = U₂\(U₁*ψs[:,i])
+    end
+
+    calc_density!(dψ, dens_mid, param, states_mid)
+    calc_potential!(vpot_mid, param, dens_mid)
+    make_Hamiltonian!(Hmat_mid, param, vpot_mid)
+
+    @. Hmat.dv = (Hmat.dv + Hmat_mid.dv)/2
+    @. Hmat.ev = (Hmat.ev + Hmat_mid.ev)/2
+
+    U₁ =          (I - 0.5*im*Δt*Hmat)
+    U₂ = factorize(I + 0.5*im*Δt*Hmat)
+
+    for i in 1:nstates
+        @views ψs[:,i] = U₂\(U₁*ψs[:,i])
+    end
+
+    calc_density!(dψ, dens, param, states)
 end
 
+
+
+#=
 function real_time_evolution!(ψs, ψs_mid, occ, 
         ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=0.1)
     
@@ -241,77 +302,80 @@ function real_time_evolution!(ψs, ψs_mid, occ,
     
     #@show calc_norm(zs, ψs[:,1]) 
 end
-
-#=
-function test_real_time_evolution!(param; α=0.1, Δt=0.1, T=20)
-    @unpack Nz, zs = param
-    
-    S = zeros(Float64, Nz)
-    #@. S = α*zs^2
-    @time ψs, occ = initial_states(param, 0.0, S; Nslab=1)
-    
-    ρ = similar(zs)
-    τ = similar(zs)
-    vpot = similar(zs)
-    calc_density!(ρ, τ, param, ψs, occ)
-    
-    ψs_mid = similar(ψs)
-    ρ_mid = similar(zs)
-    τ_mid = similar(zs)
-    vpot_mid = similar(zs)
-    
-    anim = @animate for it in 1:floor(Int, T/abs(Δt))
-        real_time_evolution!(ψs, ψs_mid, occ, 
-            ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=Δt)
-        calc_density!(ρ, τ, param, ψs, occ)
-        plot(zs, ρ; ylim=(0,0.3))
-    end
-    
-    gif(anim, "anim_fps15.gif", fps = 15)
-end
 =#
 
 
-function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=600, α=0.02, Δt=0.025, T=20)
+function calc_root_mean_square_length(param, dens)
+    @unpack Nslab, σ, zs, Nz, Δz = param 
+    @unpack ρ = dens 
 
-    ψs₀, spEs₀, Πs₀, Efermi₀, ρ₀, τ₀ = HF_calc_with_imaginary_time_step(
-        σ=σ, Δz=Δz, Nz=div(Nz,2), show=false)
+    L = sqrt(sum(@. zs^2*ρ)/sum(@. ρ))
+end
 
-    param = PhysicalParam(
-        σ=σ, Δz=Δz, Nz=Nz,
-        ψs₀=ψs₀, spEs₀=spEs₀, Πs₀=Πs₀, Efermi₀=Efermi₀)
 
-    @unpack Nz, zs = param
+
+
+
+function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=600, α=0.02, Δt=0.1, T=20)
+
+    param = PhysicalParam(Nslab=1, σ=[σ], Δz=Δz, Nz=Nz)
+    @unpack zs, Nz, Δz = param
+
+    ts = Δt:Δt:T # time [MeV⁻¹]
+
+    dψ = zeros(ComplexF64, Nz) # first derivative of wave functions 
+    Etots = zeros(Float64, length(ts)) # total energies at each time 
+    Ls = zeros(Float64, length(ts)) # mean square lengths at each time 
+
     S = zeros(Float64, Nz)
-    @. S = α*zs^2
-    @time ψs, occ = initial_states(param, 0.0, S; Nslab=1)
+    @. S = α*zs^2 
 
-    Etots = Float64[] # history of total energy 
-    
-    ρ = similar(zs)
-    τ = similar(zs)
+    states = initial_states(param, 0, S)
+    dens = Densities(ρ=similar(zs))
     vpot = similar(zs)
-    calc_density!(ρ, τ, param, ψs, occ)
-    push!(Etots, calc_total_energy(param, ρ, τ)/2)
+    calc_density!(dψ, dens, param, states)
+
+    dv = zeros(Float64, Nz)
+    ev = zeros(Float64, Nz-1)
+    Hmat = SymTridiagonal(dv, ev)
+
     
-    ψs_mid = similar(ψs)
-    ρ_mid = similar(zs)
-    τ_mid = similar(zs)
+    states_mid = initial_states(param, 0, S)
+    dens_mid = Densities(ρ=similar(zs))
     vpot_mid = similar(zs)
+
+    dv_mid = zeros(Float64, Nz)
+    ev_mid = zeros(Float64, Nz-1)
+    Hmat_mid = SymTridiagonal(dv_mid, ev_mid)
+
     
-    anim = @animate for it in 1:floor(Int, T/abs(Δt))
-        real_time_evolution!(ψs, ψs_mid, occ, 
-            ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=Δt)
-        calc_density!(ρ, τ, param, ψs, occ)
-        push!(Etots, calc_total_energy(param, ρ, τ)/2)
-        plot(zs, ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
+    @time for it in 1:length(ts)
+        real_time_evolution!(states, states_mid, 
+            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=0.1
+        )
+        Etots[it] = calc_total_energy(param, dens)
+        Ls[it] = calc_root_mean_square_length(param, dens)
+        #plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
     end
 
-    p = plot(Etots; xlabel="iter", ylabel="Etot", legend=false)
+    println("")
+    @show E_fluc = abs(std(Etots)/mean(Etots))
+    @show L_fluc = abs(std(Ls)/mean(Ls))*100
+
+    model(t, p) = 
+
+    p = plot(ts, Etots; xlabel="time [MeV⁻¹]", ylabel="total energy", legend=false)
+    display(p)
+
+    p = plot(ts, Ls; xlabel="time [MeV⁻¹]", ylabel="root mean square length", legend=false)
     display(p)
     
-    gif(anim, "small_amplitude_dynamics.gif", fps = 15)
+    #gif(anim, "small_amplitude_dynamics.gif", fps = 15)
 end
+
+
+
+
 
 
 function slab_propagation(;σ=1.4, z₀=0.0, Δz=0.1, Nz=600, k=1.0, Δt=0.025, T=20)
