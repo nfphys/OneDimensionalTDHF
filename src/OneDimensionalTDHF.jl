@@ -279,7 +279,9 @@ end
 
 
 
-function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=400, α=0.02, Δt=1e-3, T=2)
+function small_amplitude_dynamics(;
+        σ=1.4, Δz=0.1, Nz=400, α=0.02, Δt=1e-3, T=2, save_anim=false
+    )
 
     param = PhysicalParam(Nslab=1, σ=[σ], Δz=Δz, Nz=Nz)
     @unpack mc², ħc, zs, Nz, Δz = param
@@ -312,14 +314,19 @@ function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=400, α=0.02, Δt=1e-3, T
     Hmat_mid = SymTridiagonal(dv_mid, ev_mid)
 
     
-    @time for it in 1:length(ts)
+    anim = @animate for it in 1:length(ts)
         real_time_evolution!(states, states_mid, 
             dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=Δt
         )
         Etots[it] = calc_total_energy(param, dens)
         Ls[it] = calc_root_mean_square_length(param, dens)
-        #plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
+        if save_anim
+            plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
+        end
     end
+    if save_anim
+        gif(anim, "./1dimTDHF_figure/small_amplitude_dynamics.gif", fps = 15)
+    end 
 
     
     function model(t, p)
@@ -327,24 +334,23 @@ function small_amplitude_dynamics(;σ=1.4, Δz=0.1, Nz=400, α=0.02, Δt=1e-3, T
         @. A*cos(ħω*t + α) + L₀
     end
 
-    p0 = Float64[0.1, 15, 0.0, 3.0]
+    p0 = Float64[0.26, 15.5, -1.7, 3.1]
     fit = curve_fit(model, ts, Ls, p0)
 
-    p = plot(ts, Etots; xlabel="time [MeV⁻¹]", ylabel="total energy")
+    p = plot(ts, Etots; xlabel="time [MeV⁻¹]", ylabel="total energy [MeV]", label=false)
     display(p)
 
-    p = plot(ts, Ls; xlabel="time [MeV⁻¹]", ylabel="root mean square length", label="")
+    p = plot(ts, Ls; xlabel="time [MeV⁻¹]", ylabel="root mean square length [fm]", label=false)
     plot!(ts, model(ts, fit.param); label="model")
     display(p)
 
     println("")
     @show E_fluc = abs(std(Etots)/mean(Etots))*100
     @show L_fluc = abs(std(Ls)/mean(Ls))*100
-    @show fit.param
-    
-    #gif(anim, "small_amplitude_dynamics.gif", fps = 15)
+    @show fit.param[2]
 
-    return 
+
+    return
 end
 
 
@@ -352,45 +358,65 @@ end
 
 
 
-function slab_propagation(;σ=1.4, z₀=0.0, Δz=0.1, Nz=600, k=1.0, Δt=0.025, T=20)
-    ψs₀, spEs₀, Πs₀, Efermi₀, ρ₀, τ₀ = HF_calc_with_imaginary_time_step(
-        σ=σ, Δz=Δz, Nz=div(Nz,2), show=false)
 
-    param = PhysicalParam(
-        σ=σ, Δz=Δz, Nz=Nz,
-        ψs₀=ψs₀, spEs₀=spEs₀, Πs₀=Πs₀, Efermi₀=Efermi₀)
+function slab_propagation(;
+        σ=1.4, z₀=0.0, Δz=0.1, Nz=600, Ecm=10, Δt=0.01, T=1, save_anim=false
+    )
 
-    @unpack Nz, zs = param
+    param = PhysicalParam(Nslab=1, σ=[σ], Δz=Δz, Nz=Nz)
+    @unpack mc², ħc, zs, Nz, Δz = param
+
+    ts = Δt:Δt:T # time [MeV⁻¹]
+
+    dψ = zeros(ComplexF64, Nz) # first derivative of wave functions 
+    Etots = zeros(Float64, length(ts)) # total energies at each time 
+
+    k = sqrt(2mc²*Ecm/ħc^2)
     S = zeros(Float64, Nz)
-    @. S = k*zs
-    @time ψs, occ = initial_states(param, z₀, S; Nslab=1)
+    @. S = k*zs 
 
-    Etots = Float64[] # history of total energy 
-    
-    ρ = similar(zs)
-    τ = similar(zs)
+    states = initial_states(param, 0, S)
+    dens = Densities(ρ=similar(zs))
     vpot = similar(zs)
-    calc_density!(ρ, τ, param, ψs, occ)
-    push!(Etots, calc_total_energy(param, ρ, τ)/2)
+    calc_density!(dψ, dens, param, states)
+
+    dv = zeros(Float64, Nz)
+    ev = zeros(Float64, Nz-1)
+    Hmat = SymTridiagonal(dv, ev)
     
-    ψs_mid = similar(ψs)
-    ρ_mid = similar(zs)
-    τ_mid = similar(zs)
+    states_mid = initial_states(param, 0, S)
+    dens_mid = Densities(ρ=similar(zs))
     vpot_mid = similar(zs)
+
+    dv_mid = zeros(Float64, Nz)
+    ev_mid = zeros(Float64, Nz-1)
+    Hmat_mid = SymTridiagonal(dv_mid, ev_mid)
+
     
-    anim = @animate for it in 1:floor(Int, T/abs(Δt))
-        real_time_evolution!(ψs, ψs_mid, occ, 
-            ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=Δt)
-        calc_density!(ρ, τ, param, ψs, occ)
-        push!(Etots, calc_total_energy(param, ρ, τ)/2)
-        plot(zs, ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
+    anim = @animate for it in 1:length(ts)
+        real_time_evolution!(states, states_mid, 
+            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=Δt
+        )
+        Etots[it] = calc_total_energy(param, dens)
+        if save_anim
+            plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
+        end
     end
 
-    p = plot(Etots; xlabel="iter", ylabel="Etot", legend=false)
+    p = plot(ts, Etots; xlabel="time [MeV⁻¹]", ylabel="total energy [MeV]", label=false)
     display(p)
-    
-    gif(anim, "slab_propagation.gif", fps = 15)
+
+    println("")
+    @show E_fluc = abs(std(Etots)/mean(Etots))*100
+
+    if save_anim
+        gif(anim, "./1dimTDHF_figure/slab_propagation.gif", fps = 15)
+    end 
 end
+
+
+
+
 
 
 function slab_collision(;σ=1.4, z₀=[-15.0, 15.0], Δz=0.1, Nz=600, k=1.0, Δt=0.025, T=20)
