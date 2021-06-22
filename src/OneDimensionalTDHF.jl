@@ -17,6 +17,9 @@ using LsqFit
     
     a  = 0.45979 
     V₀ = -166.9239/a 
+
+    V_ext = 0
+    a_ext = 2
     
     ρ₀ = 0.16
 
@@ -51,6 +54,16 @@ end
 end
 
 
+
+
+function calc_potential!(vpot, param, dens)
+    OneDimensionalStaticHF.calc_potential!(vpot, param, dens)
+
+    @unpack mc², ħc, V_ext, a_ext, zs = param
+    @. vpot += V_ext*exp(-zs^2/2a_ext^2)*2mc²/ħc^2
+    
+    return 
+end
 
 
 
@@ -229,7 +242,14 @@ end
 
 
 function calc_total_energy(param, dens)
-    OneDimensionalStaticHF.calc_total_energy(param, dens) / 2
+    E = OneDimensionalStaticHF.calc_total_energy(param, dens) / 2
+
+    @unpack mc², ħc, zs, Δz, Nz, V_ext, a_ext = param
+    @unpack ρ = dens 
+    ε = zeros(Float64, Nz)
+    @. ε = V_ext*exp(-zs^2/2a_ext^2)*ρ
+
+    E += sum(ε)*Δz
 end
 
 function real_time_evolution!(states, states_mid, 
@@ -360,13 +380,16 @@ end
 
 
 function slab_propagation(;
-        σ=1.4, z₀=0.0, Δz=0.1, Nz=600, Ecm=10, Δt=0.01, T=1, save_anim=false
+        σ=1.4, z₀=0.0, Δz=0.1, Nz=600, Ecm=10, V_ext=10, a_ext=2, 
+        Δt=0.01, T=1, save_anim=false
     )
 
-    param = PhysicalParam(Nslab=1, σ=[σ], Δz=Δz, Nz=Nz)
+    param = PhysicalParam(Nslab=1, σ=[σ], Δz=Δz, Nz=Nz, V_ext=V_ext, a_ext=a_ext)
     @unpack mc², ħc, zs, Nz, Δz = param
 
     ts = Δt:Δt:T # time [MeV⁻¹]
+
+    vpot_ext = @. 0.1*(V_ext/10)*exp(-zs^2/2a_ext^2)
 
     dψ = zeros(ComplexF64, Nz) # first derivative of wave functions 
     Etots = zeros(Float64, length(ts)) # total energies at each time 
@@ -375,7 +398,7 @@ function slab_propagation(;
     S = zeros(Float64, Nz)
     @. S = k*zs 
 
-    states = initial_states(param, 0, S)
+    states = initial_states(param, z₀, S)
     dens = Densities(ρ=similar(zs))
     vpot = similar(zs)
     calc_density!(dψ, dens, param, states)
@@ -384,7 +407,7 @@ function slab_propagation(;
     ev = zeros(Float64, Nz-1)
     Hmat = SymTridiagonal(dv, ev)
     
-    states_mid = initial_states(param, 0, S)
+    states_mid = initial_states(param, z₀, S)
     dens_mid = Densities(ρ=similar(zs))
     vpot_mid = similar(zs)
 
@@ -399,7 +422,8 @@ function slab_propagation(;
         )
         Etots[it] = calc_total_energy(param, dens)
         if save_anim
-            plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
+            plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", label="ρ")
+            plot!(zs, vpot_ext; label="Vext")
         end
     end
 
@@ -418,7 +442,66 @@ end
 
 
 
+function slab_collision(;
+        σ=1.4, z₀=[-15.0, 15.0], Ecm=10,
+        Δz=0.1, Nz=600, Δt=0.005, T=1, save_anim=false
+    )
 
+    param = PhysicalParam(Nslab=2, σ=[σ, σ], Δz=Δz, Nz=Nz)
+    @unpack mc², ħc, zs, Nz, Δz = param
+
+    ts = Δt:Δt:T # time [MeV⁻¹]
+
+    dψ = zeros(ComplexF64, Nz) # first derivative of wave functions 
+    Etots = zeros(Float64, length(ts)) # total energies at each time 
+
+    k = sqrt(2mc²*Ecm/ħc^2)
+    S = zeros(Float64, Nz, 2)
+    @. S[:,1] =  k*zs 
+    @. S[:,2] = -k*zs
+
+    states = initial_states(param, z₀, S)
+    dens = Densities(ρ=similar(zs))
+    vpot = similar(zs)
+    calc_density!(dψ, dens, param, states)
+
+    dv = zeros(Float64, Nz)
+    ev = zeros(Float64, Nz-1)
+    Hmat = SymTridiagonal(dv, ev)
+    
+    states_mid = initial_states(param, z₀, S)
+    dens_mid = Densities(ρ=similar(zs))
+    vpot_mid = similar(zs)
+
+    dv_mid = zeros(Float64, Nz)
+    ev_mid = zeros(Float64, Nz-1)
+    Hmat_mid = SymTridiagonal(dv_mid, ev_mid)
+
+    
+    anim = @animate for it in 1:length(ts)
+        real_time_evolution!(states, states_mid, 
+            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=Δt
+        )
+        Etots[it] = calc_total_energy(param, dens)
+        if save_anim
+            plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", label="ρ")
+        end
+    end
+
+    p = plot(ts, Etots; xlabel="time [MeV⁻¹]", ylabel="total energy [MeV]", label=false)
+    display(p)
+
+    println("")
+    @show E_fluc = abs(std(Etots)/mean(Etots))*100
+
+    if save_anim
+        gif(anim, "./1dimTDHF_figure/slab_collision.gif", fps = 15)
+    end 
+end
+
+
+
+#=
 function slab_collision(;σ=1.4, z₀=[-15.0, 15.0], Δz=0.1, Nz=600, k=1.0, Δt=0.025, T=20)
     
     ψs₀, spEs₀, Πs₀, Efermi₀, ρ₀, τ₀ = HF_calc_with_imaginary_time_step(
@@ -460,6 +543,7 @@ function slab_collision(;σ=1.4, z₀=[-15.0, 15.0], Δz=0.1, Nz=600, k=1.0, Δt
     
     gif(anim, "slab_collision.gif", fps = 15)
 end
+=#
 
 
 
