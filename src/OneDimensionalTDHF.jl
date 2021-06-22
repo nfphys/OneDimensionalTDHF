@@ -5,6 +5,8 @@ using LinearAlgebra
 using Parameters
 using OneDimensionalStaticHF
 using Statistics
+using SparseArrays
+using Arpack
 using LsqFit
 
 
@@ -56,8 +58,8 @@ end
 
 
 
-function calc_potential!(vpot, param, dens)
-    OneDimensionalStaticHF.calc_potential!(vpot, param, dens)
+function calc_potential!(vpot, param, dens, Lmat)
+    OneDimensionalStaticHF.calc_potential!(vpot, param, dens, Lmat)
 
     @unpack mc², ħc, V_ext, a_ext, zs = param
     @. vpot += V_ext*exp(-zs^2/2a_ext^2)*2mc²/ħc^2
@@ -140,6 +142,8 @@ function test_initial_states(param, z₀)
 
 end
 
+
+#=
 function make_Hamiltonian!(Hmat, param, vpot)
     @unpack Δz, Nz, zs = param
     @unpack dv, ev = Hmat 
@@ -164,9 +168,110 @@ function test_make_Hamiltonian!(param; σ=1.4)
     vals, vecs = eigen(Hmat)
     vals[1:10] ./ 2
 end
+=#
 
 
+@inline function second_deriv_coeff(i, j, a, N) 
+    d = 0.0 
+    if i === 1
+        d += ifelse(j===3, -1/12, 0)
+        d += ifelse(j===2,   4/3, 0)
+        d += ifelse(j===1,  -5/2, 0)
+    elseif i === 2
+        d += ifelse(j===4, -1/12, 0)
+        d += ifelse(j===3, 4/3, 0)
+        d += ifelse(j===2, -5/2, 0)
+        d += ifelse(j===1, 4/3, 0)
+    elseif i === N-1
+        d += ifelse(j===N, 4/3, 0)
+        d += ifelse(j===N-1, -5/2, 0)
+        d += ifelse(j===N-2, 4/3, 0)
+        d += ifelse(j===N-3, -1/12, 0)
+    elseif i === N 
+        d += ifelse(j===N, -5/2, 0)
+        d += ifelse(j===N-1, 4/3, 0)
+        d += ifelse(j===N-2, -1/12, 0)
+    else
+        d += ifelse(j===i+2, -1/12, 0)
+        d += ifelse(j===i+1, 4/3, 0)
+        d += ifelse(j===i, -5/2, 0)
+        d += ifelse(j===i-1, 4/3, 0)
+        d += ifelse(j===i-2, -1/12, 0)
+    end
+    d /= a*a 
+    return d 
+end
 
+function make_Hamiltonian!(Hmat, param, vpot)
+    @unpack Nz, Δz, zs = param
+
+    fill!(Hmat, 0)
+    for iz in 1:Nz
+        Hmat[iz,iz] += vpot[iz]
+
+        for dz in -2:2
+            jz = iz + dz 
+
+            if !(1 ≤ jz ≤ Nz) continue end 
+            Hmat[iz,jz] += -second_deriv_coeff(iz, jz, Δz, Nz)
+        end
+    end
+
+    return Hmat
+end
+
+function test_make_Hamiltonian!(param; σ=1.4)
+    @unpack zs, Nz = param
+
+    vpot = @. zs^2
+
+    Hmat = spzeros(Float64, Nz, Nz)
+    make_Hamiltonian!(Hmat, param, vpot)
+    
+    vals, vecs = eigs(Hmat, which=:SM, nev=10)
+    vals ./ 2
+end
+
+function make_Laplacian!(Lmat, param, a)
+    @unpack Nz, Δz, zs = param
+
+    fill!(Lmat, 0)
+    for iz in 1:Nz
+        Lmat[iz,iz] += 1/(a*a)
+        for dz in -2:2
+            jz = iz + dz 
+
+            if !(1 ≤ jz ≤ Nz) continue end 
+            Lmat[iz,jz] += -second_deriv_coeff(iz, jz, Δz, Nz)
+        end
+    end
+
+    return Lmat
+end
+
+function test_make_Laplacian!(; a=100)
+    param = PhysicalParam()
+    @unpack zs, Nz = param
+
+    Lmat = spzeros(Float64, Nz, Nz)
+    @time make_Laplacian!(Lmat, param, a)
+
+    ρ = zeros(Float64, Nz)
+    @. ρ = (1 - zs^2)*exp(-zs^2/2)
+    
+    ϕ_exact = zeros(Float64, Nz)
+    @. ϕ_exact = exp(-zs^2/2)
+    #@. ϕ_exact -= ϕ_exact[end]
+
+    ϕ = zeros(Float64, Nz)
+    ϕ = Lmat\ρ
+
+    plot(zs, ϕ)
+    plot!(zs, ϕ_exact)
+end
+
+
+#=
 function first_deriv!(dψ, param, ψ)
     @unpack Nz, Δz, zs = param 
     Nz = length(zs)
@@ -193,7 +298,66 @@ function test_first_deriv!(param)
     plot(zs, dψ)
     plot!(zs, dψ_exact)
 end
+=#
 
+
+@inline function first_deriv_coeff(i, j, a, N) 
+    d = 0.0 
+    if i === 1
+        d += ifelse(j===3, -1/12, 0)
+        d += ifelse(j===2,   2/3, 0)
+    elseif i === 2
+        d += ifelse(j===4, -1/12, 0)
+        d += ifelse(j===3,   2/3, 0)
+        d += ifelse(j===1,  -2/3, 0)
+    elseif i === N-1
+        d += ifelse(j===N,    2/3, 0)
+        d += ifelse(j===N-2, -2/3, 0)
+        d += ifelse(j===N-3, 1/12, 0)
+    elseif i === N 
+        d += ifelse(j===N-1, -2/3, 0)
+        d += ifelse(j===N-2, 1/12, 0)
+    else
+        d += ifelse(j===i+2, -1/12, 0)
+        d += ifelse(j===i+1,   2/3, 0)
+        d += ifelse(j===i-1,  -2/3, 0)
+        d += ifelse(j===i-2,  1/12, 0)
+    end
+    d /= a
+    return d 
+end
+
+
+function first_deriv!(dψ, param, ψ)
+    @unpack Nz, Δz, zs = param 
+    Nz = length(zs)
+    
+    fill!(dψ, 0)
+    for iz in 1:Nz
+        for dz in -2:2 
+            jz = iz + dz
+            if !(1 ≤ jz ≤ Nz) continue end 
+
+            dψ[iz] += first_deriv_coeff(iz, jz, Δz, Nz)*ψ[jz]
+        end
+    end
+    
+    return
+end
+
+function test_first_deriv!(param)
+    @unpack zs = param
+
+    ψ = @. exp(-0.5zs*zs)
+    
+    dψ = similar(zs)
+    first_deriv!(dψ, param, ψ)
+    
+    dψ_exact = @. -zs*exp(-0.5zs*zs)
+    
+    plot(zs, dψ)
+    plot!(zs, dψ_exact)
+end
 
 
 
@@ -230,9 +394,12 @@ function test_calc_density!(param, z₀)
     plot!(zs, dens.ρ)
     plot!(zs, dens.τ)
     display(p)
+
+    Lmat = spzeros(Float64, Nz, Nz)
+    @time make_Laplacian!(Lmat, param, param.a)
     
     vpot = similar(zs)
-    calc_potential!(vpot, param, dens)
+    calc_potential!(vpot, param, dens, Lmat)
     p = plot(zs, vpot)
     display(p)
 end
@@ -241,8 +408,8 @@ end
 
 
 
-function calc_total_energy(param, dens)
-    E = OneDimensionalStaticHF.calc_total_energy(param, dens) / 2
+function calc_total_energy(param, dens, Lmat)
+    E = OneDimensionalStaticHF.calc_total_energy(param, dens, Lmat) / 2
 
     @unpack mc², ħc, zs, Δz, Nz, V_ext, a_ext = param
     @unpack ρ = dens 
@@ -252,29 +419,30 @@ function calc_total_energy(param, dens)
     E += sum(ε)*Δz
 end
 
+#=
 function real_time_evolution!(states, states_mid, 
-        dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=0.1
+        dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param, Lmat; Δt=0.1
     )
 
     @unpack mc², ħc, Nz, Δz, zs = param
     @unpack nstates, ψs = states 
 
-    calc_potential!(vpot, param, dens)
+    calc_potential!(vpot, param, dens, Lmat)
     make_Hamiltonian!(Hmat, param, vpot)
 
-    U₁ =          (I - 0.5*im*Δt*ħc^2/2mc²*Hmat)
-    U₂ = factorize(I + 0.5*im*Δt*ħc^2/2mc²*Hmat)
+    U₁ =          (I - 0.5*im*(Δt/2)*ħc^2/2mc²*Hmat)
+    U₂ = factorize(I + 0.5*im*(Δt/2)*ħc^2/2mc²*Hmat)
 
     for i in 1:nstates
         @views states_mid.ψs[:,i] = U₂\(U₁*ψs[:,i])
     end
 
     calc_density!(dψ, dens_mid, param, states_mid)
-    calc_potential!(vpot_mid, param, dens_mid)
-    make_Hamiltonian!(Hmat_mid, param, vpot_mid)
+    calc_potential!(vpot_mid, param, dens_mid, Lmat)
+    make_Hamiltonian!(Hmat, param, vpot_mid)
 
-    @. Hmat.dv = (Hmat.dv + Hmat_mid.dv)/2
-    @. Hmat.ev = (Hmat.ev + Hmat_mid.ev)/2
+    # @. Hmat.dv = (Hmat.dv + Hmat_mid.dv)/2
+    # @. Hmat.ev = (Hmat.ev + Hmat_mid.ev)/2
 
     U₁ =          (I - 0.5*im*Δt*ħc^2/2mc²*Hmat)
     U₂ = factorize(I + 0.5*im*Δt*ħc^2/2mc²*Hmat)
@@ -284,6 +452,45 @@ function real_time_evolution!(states, states_mid,
     end
 
     calc_density!(dψ, dens, param, states)
+
+    return
+end
+=#
+
+
+function real_time_evolution!(states, states_mid, 
+        dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param, Lmat; Δt=0.1
+    )
+
+    @unpack mc², ħc, Nz, Δz, zs = param
+    @unpack nstates, ψs = states 
+
+    calc_potential!(vpot, param, dens, Lmat)
+    make_Hamiltonian!(Hmat, param, vpot)
+
+    U₁ =          (I - 0.5*im*(Δt/2)*ħc^2/2mc²*Hmat)
+    U₂ = factorize(I + 0.5*im*(Δt/2)*ħc^2/2mc²*Hmat)
+
+    for i in 1:nstates
+        @views states_mid.ψs[:,i] = U₂\(U₁*ψs[:,i])
+    end
+
+    calc_density!(dψ, dens_mid, param, states_mid)
+    calc_potential!(vpot_mid, param, dens_mid, Lmat)
+    make_Hamiltonian!(Hmat_mid, param, vpot_mid)
+
+    @. Hmat = (Hmat + Hmat_mid)/2
+
+    U₁ =          (I - 0.5*im*Δt*ħc^2/2mc²*Hmat)
+    U₂ = factorize(I + 0.5*im*Δt*ħc^2/2mc²*Hmat)
+
+    for i in 1:nstates
+        @views ψs[:,i] = U₂\(U₁*ψs[:,i])
+    end
+
+    calc_density!(dψ, dens, param, states)
+
+    return 
 end
 
 
@@ -299,12 +506,17 @@ end
 
 
 
+
+
 function small_amplitude_dynamics(;
         σ=1.4, Δz=0.1, Nz=400, α=0.02, Δt=1e-3, T=2, save_anim=false
     )
 
     param = PhysicalParam(Nslab=1, σ=[σ], Δz=Δz, Nz=Nz)
     @unpack mc², ħc, zs, Nz, Δz = param
+
+    Lmat = spzeros(Float64, Nz, Nz)
+    @time make_Laplacian!(Lmat, param, param.a)
 
     ts = Δt:Δt:T # time [MeV⁻¹]
 
@@ -320,25 +532,20 @@ function small_amplitude_dynamics(;
     vpot = similar(zs)
     calc_density!(dψ, dens, param, states)
 
-    dv = zeros(Float64, Nz)
-    ev = zeros(Float64, Nz-1)
-    Hmat = SymTridiagonal(dv, ev)
-
+    Hmat = spzeros(Float64, Nz, Nz)
     
     states_mid = initial_states(param, 0, S)
     dens_mid = Densities(ρ=similar(zs))
     vpot_mid = similar(zs)
 
-    dv_mid = zeros(Float64, Nz)
-    ev_mid = zeros(Float64, Nz-1)
-    Hmat_mid = SymTridiagonal(dv_mid, ev_mid)
+    Hmat_mid = spzeros(Float64, Nz, Nz)
 
     
     anim = @animate for it in 1:length(ts)
         real_time_evolution!(states, states_mid, 
-            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=Δt
+            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param, Lmat; Δt=Δt
         )
-        Etots[it] = calc_total_energy(param, dens)
+        Etots[it] = calc_total_energy(param, dens, Lmat)
         Ls[it] = calc_root_mean_square_length(param, dens)
         if save_anim
             plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
@@ -378,7 +585,7 @@ end
 
 
 
-
+#=
 function slab_propagation(;
         σ=1.4, z₀=0.0, Δz=0.1, Nz=600, Ecm=10, V_ext=10, a_ext=2, 
         Δt=0.01, T=1, save_anim=false
@@ -386,6 +593,9 @@ function slab_propagation(;
 
     param = PhysicalParam(Nslab=1, σ=[σ], Δz=Δz, Nz=Nz, V_ext=V_ext, a_ext=a_ext)
     @unpack mc², ħc, zs, Nz, Δz = param
+
+    Lmat = spzeros(Float64, Nz, Nz)
+    @time make_Laplacian!(Lmat, param, param.a)
 
     ts = Δt:Δt:T # time [MeV⁻¹]
 
@@ -418,9 +628,69 @@ function slab_propagation(;
     
     anim = @animate for it in 1:length(ts)
         real_time_evolution!(states, states_mid, 
-            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=Δt
+            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param, Lmat; Δt=Δt
         )
-        Etots[it] = calc_total_energy(param, dens)
+        Etots[it] = calc_total_energy(param, dens, Lmat)
+        if save_anim
+            plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", label="ρ")
+            plot!(zs, vpot_ext; label="Vext")
+        end
+    end
+
+    p = plot(ts, Etots; xlabel="time [MeV⁻¹]", ylabel="total energy [MeV]", label=false)
+    display(p)
+
+    println("")
+    @show E_fluc = abs(std(Etots)/mean(Etots))*100
+
+    if save_anim
+        gif(anim, "./1dimTDHF_figure/slab_propagation.gif", fps = 15)
+    end 
+end
+=#
+
+
+function slab_propagation(;
+        σ=1.4, z₀=0.0, Δz=0.1, Nz=600, Ecm=10, V_ext=10, a_ext=2, 
+        Δt=0.01, T=1, save_anim=false
+    )
+
+    param = PhysicalParam(Nslab=1, σ=[σ], Δz=Δz, Nz=Nz, V_ext=V_ext, a_ext=a_ext)
+    @unpack mc², ħc, zs, Nz, Δz = param
+
+    Lmat = spzeros(Float64, Nz, Nz)
+    @time make_Laplacian!(Lmat, param, param.a)
+
+    ts = Δt:Δt:T # time [MeV⁻¹]
+
+    vpot_ext = @. 0.1*(V_ext/10)*exp(-zs^2/2a_ext^2)
+
+    dψ = zeros(ComplexF64, Nz) # first derivative of wave functions 
+    Etots = zeros(Float64, length(ts)) # total energies at each time 
+
+    k = sqrt(2mc²*Ecm/ħc^2)
+    S = zeros(Float64, Nz)
+    @. S = k*zs 
+
+    states = initial_states(param, z₀, S)
+    dens = Densities(ρ=similar(zs))
+    vpot = similar(zs)
+    calc_density!(dψ, dens, param, states)
+
+    Hmat = spzeros(Float64, Nz, Nz)
+
+    states_mid = initial_states(param, z₀, S)
+    dens_mid = Densities(ρ=similar(zs))
+    vpot_mid = similar(zs)
+
+    Hmat_mid = spzeros(Float64, Nz, Nz)
+
+
+    anim = @animate for it in 1:length(ts)
+        real_time_evolution!(states, states_mid, 
+            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param, Lmat; Δt=Δt
+        )
+        Etots[it] = calc_total_energy(param, dens, Lmat)
         if save_anim
             plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", label="ρ")
             plot!(zs, vpot_ext; label="Vext")
