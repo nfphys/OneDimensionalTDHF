@@ -289,7 +289,7 @@ end
 
 
 function calc_root_mean_square_length(param, dens)
-    @unpack Nslab, σ, zs, Nz, Δz = param 
+    @unpack zs = param 
     @unpack ρ = dens 
 
     L = sqrt(sum(@. zs^2*ρ)/sum(@. ρ))
@@ -442,6 +442,15 @@ end
 
 
 
+
+function calc_separation_distance(param, dens)
+    @unpack zs = param 
+    @unpack ρ = dens 
+
+    d = 2*sqrt(sum(@. abs(zs)*ρ)/sum(@. ρ))
+end
+
+
 function slab_collision(;
         σ=1.4, z₀=[-15.0, 15.0], Ecm=10,
         Δz=0.1, Nz=600, Δt=0.005, T=1, save_anim=false
@@ -454,6 +463,10 @@ function slab_collision(;
 
     dψ = zeros(ComplexF64, Nz) # first derivative of wave functions 
     Etots = zeros(Float64, length(ts)) # total energies at each time 
+
+    Ls = zeros(Float64, length(ts)) # mean square lengths at each time 
+    ds = zeros(Float64, length(ts)) # separation distance at each time 
+    σs = zeros(Float64, length(ts)) # fragment elongation at each time 
 
     k = sqrt(2mc²*Ecm/ħc^2)
     S = zeros(Float64, Nz, 2)
@@ -483,6 +496,9 @@ function slab_collision(;
             dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=Δt
         )
         Etots[it] = calc_total_energy(param, dens)
+        Ls[it] = calc_root_mean_square_length(param, dens)
+        ds[it] = calc_separation_distance(param, dens)
+        σs[it] = sqrt(Ls[it]*Ls[it] - ds[it]*ds[it]/4)
         if save_anim
             plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", label="ρ")
         end
@@ -490,6 +506,10 @@ function slab_collision(;
 
     p = plot(ts, Etots; xlabel="time [MeV⁻¹]", ylabel="total energy [MeV]", label=false)
     display(p)
+
+    p = plot(ts, ds; xlabel="time [MeV⁻¹]", ylabel="separation distance [fm]", label=false)
+    display(p)
+
 
     println("")
     @show E_fluc = abs(std(Etots)/mean(Etots))*100
@@ -500,50 +520,6 @@ function slab_collision(;
 end
 
 
-
-#=
-function slab_collision(;σ=1.4, z₀=[-15.0, 15.0], Δz=0.1, Nz=600, k=1.0, Δt=0.025, T=20)
-    
-    ψs₀, spEs₀, Πs₀, Efermi₀, ρ₀, τ₀ = HF_calc_with_imaginary_time_step(
-        σ=σ, Δz=Δz, Nz=div(Nz,2), show=false)
-
-    param = PhysicalParam(
-        σ=σ, Δz=Δz, Nz=Nz,
-        ψs₀=ψs₀, spEs₀=spEs₀, Πs₀=Πs₀, Efermi₀=Efermi₀)
-
-    @unpack Nz, zs = param
-    S = zeros(Float64, Nz, 2)
-    @. S[:,1] =  k*zs
-    @. S[:,2] = -k*zs 
-    @time ψs, occ = initial_states(param, z₀, S; Nslab=2)
-
-    Etots = Float64[] # history of total energy 
-    
-    ρ = similar(zs)
-    τ = similar(zs)
-    vpot = similar(zs)
-    calc_density!(ρ, τ, param, ψs, occ)
-    push!(Etots, calc_total_energy(param, ρ, τ)/2)
-    
-    ψs_mid = similar(ψs)
-    ρ_mid = similar(zs)
-    τ_mid = similar(zs)
-    vpot_mid = similar(zs)
-    
-    anim = @animate for it in 1:floor(Int, T/abs(Δt))
-        real_time_evolution!(ψs, ψs_mid, occ, 
-            ρ, τ, ρ_mid, τ_mid, vpot, vpot_mid, param; Δt=Δt)
-        calc_density!(ρ, τ, param, ψs, occ)
-        push!(Etots, calc_total_energy(param, ρ, τ)/2)
-        plot(zs, ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
-    end
-
-    p = plot(Etots; xlabel="iter", ylabel="Etot", legend=false)
-    display(p)
-    
-    gif(anim, "slab_collision.gif", fps = 15)
-end
-=#
 
 
 
