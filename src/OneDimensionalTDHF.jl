@@ -477,9 +477,9 @@ function real_time_evolution!(states, states_mid,
 
     calc_density!(dψ, dens_mid, param, states_mid)
     calc_potential!(vpot_mid, param, dens_mid, Lmat)
-    make_Hamiltonian!(Hmat_mid, param, vpot_mid)
+    make_Hamiltonian!(Hmat, param, vpot_mid)
 
-    @. Hmat = (Hmat + Hmat_mid)/2
+    #@. Hmat = (Hmat + Hmat_mid)/2
 
     U₁ =          (I - 0.5*im*Δt*ħc^2/2mc²*Hmat)
     U₂ = factorize(I + 0.5*im*Δt*ħc^2/2mc²*Hmat)
@@ -551,9 +551,6 @@ function small_amplitude_dynamics(;
             plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", legend=false)
         end
     end
-    if save_anim
-        gif(anim, "./1dimTDHF_figure/small_amplitude_dynamics.gif", fps = 15)
-    end 
 
     
     function model(t, p)
@@ -577,77 +574,15 @@ function small_amplitude_dynamics(;
     @show fit.param[2]
 
 
-    return
-end
-
-
-
-
-
-
-#=
-function slab_propagation(;
-        σ=1.4, z₀=0.0, Δz=0.1, Nz=600, Ecm=10, V_ext=10, a_ext=2, 
-        Δt=0.01, T=1, save_anim=false
-    )
-
-    param = PhysicalParam(Nslab=1, σ=[σ], Δz=Δz, Nz=Nz, V_ext=V_ext, a_ext=a_ext)
-    @unpack mc², ħc, zs, Nz, Δz = param
-
-    Lmat = spzeros(Float64, Nz, Nz)
-    @time make_Laplacian!(Lmat, param, param.a)
-
-    ts = Δt:Δt:T # time [MeV⁻¹]
-
-    vpot_ext = @. 0.1*(V_ext/10)*exp(-zs^2/2a_ext^2)
-
-    dψ = zeros(ComplexF64, Nz) # first derivative of wave functions 
-    Etots = zeros(Float64, length(ts)) # total energies at each time 
-
-    k = sqrt(2mc²*Ecm/ħc^2)
-    S = zeros(Float64, Nz)
-    @. S = k*zs 
-
-    states = initial_states(param, z₀, S)
-    dens = Densities(ρ=similar(zs))
-    vpot = similar(zs)
-    calc_density!(dψ, dens, param, states)
-
-    dv = zeros(Float64, Nz)
-    ev = zeros(Float64, Nz-1)
-    Hmat = SymTridiagonal(dv, ev)
-    
-    states_mid = initial_states(param, z₀, S)
-    dens_mid = Densities(ρ=similar(zs))
-    vpot_mid = similar(zs)
-
-    dv_mid = zeros(Float64, Nz)
-    ev_mid = zeros(Float64, Nz-1)
-    Hmat_mid = SymTridiagonal(dv_mid, ev_mid)
-
-    
-    anim = @animate for it in 1:length(ts)
-        real_time_evolution!(states, states_mid, 
-            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param, Lmat; Δt=Δt
-        )
-        Etots[it] = calc_total_energy(param, dens, Lmat)
-        if save_anim
-            plot(zs, dens.ρ; ylim=(0,0.3), xlabel="z [fm]", ylabel="ρ [fm⁻³]", label="ρ")
-            plot!(zs, vpot_ext; label="Vext")
-        end
-    end
-
-    p = plot(ts, Etots; xlabel="time [MeV⁻¹]", ylabel="total energy [MeV]", label=false)
-    display(p)
-
-    println("")
-    @show E_fluc = abs(std(Etots)/mean(Etots))*100
-
     if save_anim
-        gif(anim, "./1dimTDHF_figure/slab_propagation.gif", fps = 15)
+        gif(anim, "./1dimTDHF_figure/small_amplitude_dynamics.gif", fps = 15)
     end 
 end
-=#
+
+
+
+
+
 
 
 function slab_propagation(;
@@ -729,6 +664,9 @@ function slab_collision(;
     param = PhysicalParam(Nslab=2, σ=[σ, σ], Δz=Δz, Nz=Nz)
     @unpack mc², ħc, zs, Nz, Δz = param
 
+    Lmat = spzeros(Float64, Nz, Nz)
+    @time make_Laplacian!(Lmat, param, param.a)
+
     ts = Δt:Δt:T # time [MeV⁻¹]
 
     dψ = zeros(ComplexF64, Nz) # first derivative of wave functions 
@@ -748,24 +686,20 @@ function slab_collision(;
     vpot = similar(zs)
     calc_density!(dψ, dens, param, states)
 
-    dv = zeros(Float64, Nz)
-    ev = zeros(Float64, Nz-1)
-    Hmat = SymTridiagonal(dv, ev)
+    Hmat = spzeros(Float64, Nz, Nz)
     
     states_mid = initial_states(param, z₀, S)
     dens_mid = Densities(ρ=similar(zs))
     vpot_mid = similar(zs)
 
-    dv_mid = zeros(Float64, Nz)
-    ev_mid = zeros(Float64, Nz-1)
-    Hmat_mid = SymTridiagonal(dv_mid, ev_mid)
+    Hmat_mid = spzeros(Float64, Nz, Nz)
 
     
     anim = @animate for it in 1:length(ts)
         real_time_evolution!(states, states_mid, 
-            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param; Δt=Δt
+            dψ, dens, dens_mid, vpot, vpot_mid, Hmat, Hmat_mid, param, Lmat; Δt=Δt
         )
-        Etots[it] = calc_total_energy(param, dens)
+        Etots[it] = calc_total_energy(param, dens, Lmat)
         Ls[it] = calc_root_mean_square_length(param, dens)
         ds[it] = calc_separation_distance(param, dens)
         σs[it] = sqrt(Ls[it]*Ls[it] - ds[it]*ds[it]/4)
